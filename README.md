@@ -10,7 +10,7 @@ A single-file translation mod that adds real-time dialogue translation to **any*
 
 - **Universal compatibility** — Works with Ren'Py 6.x, 7.x, and 8.x
 - **Single file installation** — Just drop one `.rpy` file into the game folder
-- **3 API providers** — Google Gemini (free tier), DeepL, and OpenAI (GPT-4o-mini)
+- **5 API providers** — Gemini, DeepL, OpenAI, Google Translate, and LibreTranslate
 - **28 languages** supported (Arabic, Chinese, English, French, German, Japanese, Korean, Spanish, Turkish, and more)
 - **Two display modes:**
   - **Overlay mode** — Translation appears in a separate panel below dialogue
@@ -36,7 +36,7 @@ That's it. No other files or dependencies needed.
 
 ## Getting an API Key
 
-This mod supports three translation providers:
+This mod supports five translation providers:
 
 ### Google Gemini (Free)
 1. Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
@@ -54,11 +54,23 @@ This mod supports three translation providers:
 2. Create a new API key
 3. Copy the generated key
 
+### Google Cloud Translation
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a project and enable **Cloud Translation API**
+3. Create an API key under **Credentials**
+4. Copy the key (note: has a free tier of 500K chars/month)
+
+### LibreTranslate
+- **Public instance**: Use [libretranslate.com](https://libretranslate.com) (no key needed, rate-limited)
+- **Self-hosted**: Install LibreTranslate and set the URL in settings
+- Some public instances may require an API key
+
 ## Setup (First Time)
 
 1. In the game, click the **gear icon** (top-right corner) to open settings
-2. Select your **API provider** (Gemini, DeepL, or OpenAI)
+2. Select your **API provider** (Gemini, DeepL, OpenAI, Google Translate, or LibreTranslate)
 3. Click **"Paste"** next to the API key field (copies from your clipboard)
+   - For LibreTranslate, you can also set a custom URL (e.g., your self-hosted instance)
 4. Select your **target language** from the list
 5. Close the settings panel
 
@@ -119,7 +131,7 @@ The mod hooks into Ren'Py's dialogue system by wrapping the internal `display_sa
 | **Mod Status** | Enable/disable the entire mod |
 | **Translation Mode** | Switch between Overlay (panel) and Inline (replace text) |
 | **Inline Font Size** | Adjust font size for inline translations (Auto or 10-40) |
-| **API Provider** | Choose between Gemini, DeepL, or OpenAI |
+| **API Provider** | Choose between Gemini, DeepL, OpenAI, Google Translate, or LibreTranslate |
 | **API Key** | Your API key for the selected provider (paste from clipboard) |
 | **Target Language** | The language to translate dialogue into |
 | **Cache** | View count and clear cached translations |
@@ -131,6 +143,9 @@ The mod hooks into Ren'Py's dialogue system by wrapping the internal `display_sa
 - Translation cache persists across game sessions via Ren'Py's persistent data
 - The "Paste" button works on Windows (PowerShell), macOS (pbpaste), and Linux (xclip)
 - The free Gemini API tier has rate limits. If you see "Too many requests", wait a moment and try again
+- Google Cloud Translation requires a GCP project and billing account (free tier available)
+- LibreTranslate is free and open-source; you can self-host it for unlimited use
+- **NixOS**: Use `nix develop` (see `flake.nix`) for a development environment with Ren'Py included
 - Cache is automatically pruned when it exceeds 5,000 entries (removes oldest 20%)
 - TTS audio files are cached in `game/tts_cache/` for offline replay
 
@@ -142,6 +157,7 @@ The mod hooks into Ren'Py's dialogue system by wrapping the internal `display_sa
 | "API key required" | Open settings and paste your API key for the selected provider |
 | "Invalid API key" | Your API key may be expired or incorrect. Generate a new one |
 | "Too many requests" | You've hit the API rate limit. Wait 30-60 seconds |
+| Google Translate 401/403 | Check your GCP API key and ensure Cloud Translation API is enabled |
 | Buttons don't appear during dialogue | Click the ↻ reset button, or restart the game |
 | Inline mode shows original text briefly | This is expected for uncached translations — enable auto-translate for best results |
 | DeepL language not supported | DeepL supports fewer languages than Gemini — switch provider if needed |

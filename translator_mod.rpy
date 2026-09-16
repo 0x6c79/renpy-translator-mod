@@ -41,13 +41,23 @@ init -100 python:
         persistent._translator_inline_font_size = 0  # 0 = auto (use game default)
 
     if persistent._translator_api_provider is None:
-        persistent._translator_api_provider = "gemini"  # "gemini", "deepl", "openai"
+        persistent._translator_api_provider = "gemini"  # "gemini", "deepl", "openai", "google_translate", "libretranslate"
 
     if persistent._translator_deepl_key is None:
         persistent._translator_deepl_key = ""
 
     if persistent._translator_openai_key is None:
         persistent._translator_openai_key = ""
+
+    if persistent._translator_google_translate_key is None:
+        persistent._translator_google_translate_key = ""
+
+    if persistent._translator_libretranslate_key is None:
+        persistent._translator_libretranslate_key = ""
+
+    # LibreTranslate base URL (self-hosted or public instance)
+    if persistent._translator_libretranslate_url is None:
+        persistent._translator_libretranslate_url = "https://libretranslate.com"
 
     _translator_languages = [
         "Arabic", "Bengali", "Chinese (Simplified)", "Chinese (Traditional)",
@@ -67,6 +77,36 @@ init -100 python:
         "Turkish": "TR", "Ukrainian": "UK", "Chinese (Simplified)": "ZH-HANS",
         "Chinese (Traditional)": "ZH-HANT"
     }
+
+    # ISO 639-1/BCP-47 language codes for Google Cloud Translation
+    _translator_google_lang_codes = {
+        "Arabic": "ar", "Bengali": "bn", "Chinese (Simplified)": "zh-CN",
+        "Chinese (Traditional)": "zh-TW", "Czech": "cs", "Dutch": "nl",
+        "English": "en", "Filipino": "fil", "French": "fr", "German": "de",
+        "Greek": "el", "Hindi": "hi", "Hungarian": "hu", "Indonesian": "id",
+        "Italian": "it", "Japanese": "ja", "Korean": "ko", "Malay": "ms",
+        "Polish": "pl", "Portuguese (Brazilian)": "pt-BR", "Romanian": "ro",
+        "Russian": "ru", "Spanish": "es", "Swedish": "sv", "Thai": "th",
+        "Turkish": "tr", "Ukrainian": "uk", "Vietnamese": "vi"
+    }
+
+    # ISO 639-1 language codes for LibreTranslate
+    _translator_libretranslate_lang_codes = {
+        "Arabic": "ar", "Bengali": "bn", "Chinese (Simplified)": "zh",
+        "Chinese (Traditional)": "zh", "Czech": "cs", "Dutch": "nl",
+        "English": "en", "Filipino": "fil", "French": "fr", "German": "de",
+        "Greek": "el", "Hindi": "hi", "Hungarian": "hu", "Indonesian": "id",
+        "Italian": "it", "Japanese": "ja", "Korean": "ko", "Malay": "ms",
+        "Polish": "pl", "Portuguese (Brazilian)": "pt-BR", "Romanian": "ro",
+        "Russian": "ru", "Spanish": "es", "Swedish": "sv", "Thai": "th",
+        "Turkish": "tr", "Ukrainian": "uk", "Vietnamese": "vi"
+    }
+
+    def _translator_google_lang_code(target_lang):
+        return _translator_google_lang_codes.get(target_lang, "en")
+
+    def _translator_libretranslate_lang_code(target_lang):
+        return _translator_libretranslate_lang_codes.get(target_lang, "en")
 
     # Cache pruning at startup
     if persistent._translator_cache and len(persistent._translator_cache) > 5000:
@@ -570,6 +610,141 @@ init 100 python:
                 pass
 
     ##########################################################################
+    ## 3e-4. Google Translate API v2 (runs in background thread)
+    ##########################################################################
+
+    def _translator_api_call_google_translate(text, target_lang, api_key, guard_text):
+        """Call Google Cloud Translation API v2 in a background thread."""
+        try:
+            clean_text = _translator_strip_tags(text)
+
+            # Google Cloud Translation v2 endpoint
+            status, data = _tl_http_post(
+                "https://translation.googleapis.com/language/translate/v2?key={}".format(api_key.strip()),
+                json_data={
+                    "q": clean_text,
+                    "target": _translator_google_lang_code(target_lang),
+                    "source": "auto"
+                },
+                timeout=15
+            )
+
+            if store._tl_current_what != guard_text:
+                return
+
+            if status == 200 and data:
+                translated = data["data"]["translations"][0]["translatedText"].strip()
+                cache_key = "{}::{}".format(target_lang, _translator_strip_tags(guard_text))
+                if persistent._translator_cache is None:
+                    persistent._translator_cache = {}
+                persistent._translator_cache[cache_key] = translated
+
+                store._tl_translation_counter += 1
+                if store._tl_translation_counter % 100 == 0:
+                    if len(persistent._translator_cache) > 5000:
+                        keys = list(persistent._translator_cache.keys())
+                        to_remove = keys[:len(keys) // 5]
+                        for k in to_remove:
+                            del persistent._translator_cache[k]
+
+                store._tl_translated_text = translated
+                store._tl_show_translation = True
+                store._tl_error_message = ""
+            elif status == 429:
+                store._tl_error_message = "Too many requests. Please wait."
+            elif status == 401:
+                store._tl_error_message = "Invalid API key. Check settings."
+            elif status == 403:
+                store._tl_error_message = "API quota exceeded. Try again later."
+            else:
+                store._tl_error_message = "Google Translate error (HTTP {}).".format(status)
+
+        except Exception as e:
+            if store._tl_current_what == guard_text:
+                store._tl_error_message = "Error: {}".format(str(e)[:60])
+
+        finally:
+            store._tl_is_translating = False
+            try:
+                renpy.restart_interaction()
+            except Exception:
+                pass
+
+    ##########################################################################
+    ## 3e-5. LibreTranslate (runs in background thread)
+    ##########################################################################
+
+    def _translator_api_call_libretranslate(text, target_lang, api_key, guard_text):
+        """Call LibreTranslate API in a background thread."""
+        try:
+            clean_text = _translator_strip_tags(text)
+            base_url = persistent._translator_libretranslate_url or "https://libretranslate.com"
+            # Remove trailing slash for URL construction
+            base_url = base_url.rstrip("/")
+
+            # LibreTranslate supports language codes like 'en', 'fr', etc.
+            # Map our language names to ISO codes
+            target_code = _translator_libretranslate_lang_code(target_lang)
+
+            payload = {
+                "q": clean_text,
+                "target": target_code,
+                "source": "auto"
+            }
+
+            headers = {}
+            if api_key and api_key.strip():
+                headers["Authorization"] = "Bearer {}".format(api_key.strip())
+
+            status, data = _tl_http_post(
+                "{}/translate".format(base_url),
+                headers=headers,
+                json_data=payload,
+                timeout=15
+            )
+
+            if store._tl_current_what != guard_text:
+                return
+
+            if status == 200 and data:
+                translated = data["translatedText"].strip()
+                cache_key = "{}::{}".format(target_lang, _translator_strip_tags(guard_text))
+                if persistent._translator_cache is None:
+                    persistent._translator_cache = {}
+                persistent._translator_cache[cache_key] = translated
+
+                store._tl_translation_counter += 1
+                if store._tl_translation_counter % 100 == 0:
+                    if len(persistent._translator_cache) > 5000:
+                        keys = list(persistent._translator_cache.keys())
+                        to_remove = keys[:len(keys) // 5]
+                        for k in to_remove:
+                            del persistent._translator_cache[k]
+
+                store._tl_translated_text = translated
+                store._tl_show_translation = True
+                store._tl_error_message = ""
+            elif status == 429:
+                store._tl_error_message = "Too many requests. Please wait."
+            elif status == 401:
+                store._tl_error_message = "Invalid API key. Check settings."
+            elif status == 403:
+                store._tl_error_message = "Forbidden. Check API key and rate limits."
+            else:
+                store._tl_error_message = "LibreTranslate error (HTTP {}).".format(status)
+
+        except Exception as e:
+            if store._tl_current_what == guard_text:
+                store._tl_error_message = "Error: {}".format(str(e)[:60])
+
+        finally:
+            store._tl_is_translating = False
+            try:
+                renpy.restart_interaction()
+            except Exception:
+                pass
+
+    ##########################################################################
     ## 3f. Toggle translation (called from overlay button)
     ##########################################################################
 
@@ -594,11 +769,20 @@ init 100 python:
         elif persistent._translator_api_provider == "openai":
             fn = _translator_api_call_openai
             api_key = persistent._translator_openai_key
+        elif persistent._translator_api_provider == "google_translate":
+            fn = _translator_api_call_google_translate
+            api_key = persistent._translator_google_translate_key
+        elif persistent._translator_api_provider == "libretranslate":
+            fn = _translator_api_call_libretranslate
+            api_key = persistent._translator_libretranslate_key
         else:
             fn = _translator_api_call
             api_key = persistent._translator_api_key
 
-        if not api_key or not api_key.strip():
+        if persistent._translator_api_provider == "libretranslate":
+            # LibreTranslate can work without API key (public instances)
+            api_key = api_key.strip() if api_key else ""
+        elif not api_key or not api_key.strip():
             store._tl_error_message = "API key required. Enter it in settings."
             return
 
@@ -760,10 +944,16 @@ init 100 python:
             api_key = persistent._translator_deepl_key
         elif persistent._translator_api_provider == "openai":
             api_key = persistent._translator_openai_key
+        elif persistent._translator_api_provider == "google_translate":
+            api_key = persistent._translator_google_translate_key
+        elif persistent._translator_api_provider == "libretranslate":
+            api_key = persistent._translator_libretranslate_key
         else:
             api_key = persistent._translator_api_key
 
-        if not api_key or not api_key.strip():
+        if persistent._translator_api_provider == "libretranslate":
+            pass  # No key required for public instances
+        elif not api_key or not api_key.strip():
             store._tl_error_message = "API key required."
             renpy.restart_interaction()
             return
@@ -795,6 +985,23 @@ init 100 python:
                     data={"auth_key": api_key, "text": word, "target_lang": "EN"},
                     timeout=10
                 )
+            elif provider == "google_translate":
+                status, data = _tl_http_post(
+                    "https://translation.googleapis.com/language/translate/v2?key={}".format(api_key),
+                    json_data={"q": word, "target": "en", "source": "auto"},
+                    timeout=10
+                )
+            elif provider == "libretranslate":
+                base_url = (persistent._translator_libretranslate_url or "https://libretranslate.com").rstrip("/")
+                headers = {}
+                if api_key and api_key.strip():
+                    headers["Authorization"] = "Bearer {}".format(api_key.strip())
+                status, data = _tl_http_post(
+                    "{}/translate".format(base_url),
+                    headers=headers,
+                    json_data={"q": word, "target": "en", "source": "auto"},
+                    timeout=10
+                )
             elif provider == "openai":
                 status, data = _tl_http_post(
                     "https://api.openai.com/v1/chat/completions",
@@ -817,6 +1024,10 @@ init 100 python:
             if status == 200 and data:
                 if provider == "deepl":
                     original = data["translations"][0]["text"].strip()
+                elif provider == "google_translate":
+                    original = data["data"]["translations"][0]["translatedText"].strip()
+                elif provider == "libretranslate":
+                    original = data["translatedText"].strip()
                 elif provider == "openai":
                     original = data["choices"][0]["message"]["content"].strip()
                 else:
@@ -1094,6 +1305,22 @@ init 100 python:
         clip = _translator_get_clipboard()
         if clip:
             persistent._translator_openai_key = clip
+        else:
+            store._tl_error_message = "Paste failed."
+        renpy.restart_interaction()
+
+    def _translator_paste_google_translate_key():
+        clip = _translator_get_clipboard()
+        if clip:
+            persistent._translator_google_translate_key = clip
+        else:
+            store._tl_error_message = "Paste failed."
+        renpy.restart_interaction()
+
+    def _translator_paste_libretranslate_key():
+        clip = _translator_get_clipboard()
+        if clip:
+            persistent._translator_libretranslate_key = clip
         else:
             store._tl_error_message = "Paste failed."
         renpy.restart_interaction()
@@ -1467,7 +1694,7 @@ screen _translator_settings():
                 hbox:
                     spacing 8
                     text "API:" size 18 color "#cccccc" yalign 0.5 font "DejaVuSans.ttf"
-                    for _prov, _prov_label, _prov_color in [("gemini", "Gemini", "#ffcc44"), ("deepl", "DeepL", "#0F2B46"), ("openai", "OpenAI", "#10a37f")]:
+                    for _prov, _prov_label, _prov_color in [("gemini", "Gemini", "#ffcc44"), ("deepl", "DeepL", "#0F2B46"), ("openai", "OpenAI", "#10a37f"), ("google_translate", "Google Translate", "#4285F4"), ("libretranslate", "LibreTranslate", "#00897B")]:
                         textbutton _prov_label:
                             text_size 16
                             text_font "DejaVuSans.ttf"
@@ -1556,6 +1783,58 @@ screen _translator_settings():
                             yalign 0.5
                             action SetField(persistent, "_translator_openai_key", "")
 
+                elif persistent._translator_api_provider == "google_translate":
+                    text "Google Translate API Key:" size 18 color "#cccccc" font "DejaVuSans.ttf"
+                    hbox:
+                        spacing 10
+                        if persistent._translator_google_translate_key:
+                            $ _tl_gt_key_display = persistent._translator_google_translate_key[:8] + "..." + persistent._translator_google_translate_key[-4:] if len(persistent._translator_google_translate_key) > 12 else persistent._translator_google_translate_key
+                            text "[_tl_gt_key_display]" size 16 color "#88cc88" font "DejaVuSans.ttf" yalign 0.5
+                        else:
+                            text "No key set" size 16 color "#aa6666" font "DejaVuSans.ttf" yalign 0.5
+                        textbutton "Paste":
+                            text_size 16
+                            text_color "#66aaff"
+                            text_hover_color "#99ccff"
+                            text_font "DejaVuSans.ttf"
+                            yalign 0.5
+                            action Function(_translator_paste_google_translate_key)
+                        textbutton "Clear":
+                            text_size 16
+                            text_color "#ff6666"
+                            text_hover_color "#ff9999"
+                            text_font "DejaVuSans.ttf"
+                            yalign 0.5
+                            action SetField(persistent, "_translator_google_translate_key", "")
+
+                elif persistent._translator_api_provider == "libretranslate":
+                    text "LibreTranslate URL:" size 18 color "#cccccc" font "DejaVuSans.ttf"
+                    hbox:
+                        spacing 10
+                        text "[persistent._translator_libretranslate_url]" size 16 color "#88cc88" font "DejaVuSans.ttf" yalign 0.5
+                    hbox:
+                        spacing 10
+                        text "API Key (optional):" size 16 color "#cccccc" font "DejaVuSans.ttf" yalign 0.5
+                        if persistent._translator_libretranslate_key:
+                            $ _tl_lt_key_display = persistent._translator_libretranslate_key[:8] + "..." + persistent._translator_libretranslate_key[-4:] if len(persistent._translator_libretranslate_key) > 12 else persistent._translator_libretranslate_key
+                            text "[_tl_lt_key_display]" size 16 color "#88cc88" font "DejaVuSans.ttf" yalign 0.5
+                        else:
+                            text "No key" size 16 color "#aa6666" font "DejaVuSans.ttf" yalign 0.5
+                        textbutton "Paste":
+                            text_size 16
+                            text_color "#66aaff"
+                            text_hover_color "#99ccff"
+                            text_font "DejaVuSans.ttf"
+                            yalign 0.5
+                            action Function(_translator_paste_libretranslate_key)
+                        textbutton "Clear":
+                            text_size 16
+                            text_color "#ff6666"
+                            text_hover_color "#ff9999"
+                            text_font "DejaVuSans.ttf"
+                            yalign 0.5
+                            action SetField(persistent, "_translator_libretranslate_key", "")
+
                 null height 3
 
                 # Language selection
@@ -1603,6 +1882,10 @@ screen _translator_settings():
                     text "deepl.com/pro-api" size 14 color "#6699cc" font "DejaVuSans.ttf"
                 elif persistent._translator_api_provider == "openai":
                     text "platform.openai.com/api-keys" size 14 color "#6699cc" font "DejaVuSans.ttf"
+                elif persistent._translator_api_provider == "google_translate":
+                    text "cloud.google.com/translate/docs" size 14 color "#6699cc" font "DejaVuSans.ttf"
+                elif persistent._translator_api_provider == "libretranslate":
+                    text "libretranslate.com" size 14 color "#6699cc" font "DejaVuSans.ttf"
                 else:
                     text "aistudio.google.com/apikey" size 14 color "#6699cc" font "DejaVuSans.ttf"
                 text "Shortcuts: T = translate, Shift+T = auto" size 13 color "#666666" font "DejaVuSans.ttf"
