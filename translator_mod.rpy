@@ -378,15 +378,25 @@ init 100 python:
     except ImportError:
         _tl_has_requests = False
 
-    def _tl_http_post(url, headers=None, json_data=None, data=None, timeout=10):
-        """POST request with requests/urllib fallback. Returns (status_code, response_dict_or_None)."""
+    def _tl_http_post(url, headers=None, json_data=None, data=None, timeout=10, return_error_body=False):
+        """POST request with requests/urllib fallback.
+        Returns (status_code, response_dict_or_None).
+        If return_error_body=True, non-200 responses return the response text instead of None."""
         if _tl_has_requests:
             if json_data is not None:
                 _tl_api_session.headers.update(headers or {})
                 r = _tl_api_session.post(url, json=json_data, timeout=timeout)
             else:
                 r = _tl_api_session.post(url, headers=headers or {}, data=data, timeout=timeout)
-            return r.status_code, r.json() if r.status_code == 200 else None
+            if r.status_code == 200:
+                return r.status_code, r.json()
+            elif return_error_body:
+                try:
+                    return r.status_code, r.text
+                except Exception:
+                    return r.status_code, None
+            else:
+                return r.status_code, None
         else:
             import json
             try:
@@ -700,7 +710,8 @@ init 100 python:
                 "{}/translate".format(base_url),
                 headers=headers,
                 json_data=payload,
-                timeout=15
+                timeout=15,
+                return_error_body=True
             )
 
             if store._tl_current_what != guard_text:
@@ -726,6 +737,11 @@ init 100 python:
                 store._tl_error_message = ""
             elif status == 429:
                 store._tl_error_message = "Too many requests. Please wait."
+            elif status == 400:
+                if data:
+                    store._tl_error_message = "LibreTranslate: {}".format(str(data)[:120])
+                else:
+                    store._tl_error_message = "LibreTranslate error (HTTP 400). Check API key."
             elif status == 401:
                 store._tl_error_message = "Invalid API key. Check settings."
             elif status == 403:

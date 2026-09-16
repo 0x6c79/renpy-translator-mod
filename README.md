@@ -61,9 +61,9 @@ This mod supports five translation providers:
 4. Copy the key (note: has a free tier of 500K chars/month)
 
 ### LibreTranslate
-- **Public instance**: Use [libretranslate.com](https://libretranslate.com) (no key needed, rate-limited)
-- **Self-hosted**: Install LibreTranslate and set the URL in settings
-- Some public instances may require an API key
+- **Public instance**: Use [libretranslate.com](https://libretranslate.com) — **requires API key** (get one free at [portal.libretranslate.com](https://portal.libretranslate.com))
+- **Self-hosted**: Install LibreTranslate and set the URL in settings (no key needed)
+- **Note**: As of 2024, libretranslate.com requires an API key for all requests
 
 ## Setup (First Time)
 
